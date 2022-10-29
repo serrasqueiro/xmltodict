@@ -15,7 +15,11 @@ except ImportError:  # pragma no cover
     except ImportError:
         from io import StringIO
 
-from collections import OrderedDict
+_dict = dict
+import platform
+if tuple(map(int, platform.python_version_tuple()[:2])) < (3, 7):
+    from collections import OrderedDict as _dict
+
 from inspect import isgenerator
 
 try:  # pragma no cover
@@ -28,7 +32,7 @@ except NameError:  # pragma no cover
     _unicode = str
 
 __author__ = 'Martin Blech'
-__version__ = '0.12.0'
+__version__ = '0.13.0'
 __license__ = 'MIT'
 
 
@@ -46,7 +50,7 @@ class _DictSAXHandler(object):
                  force_cdata=False,
                  cdata_separator='',
                  postprocessor=None,
-                 dict_constructor=OrderedDict,
+                 dict_constructor=_dict,
                  strip_whitespace=True,
                  namespace_separator=':',
                  namespaces=None,
@@ -68,7 +72,7 @@ class _DictSAXHandler(object):
         self.strip_whitespace = strip_whitespace
         self.namespace_separator = namespace_separator
         self.namespaces = namespaces
-        self.namespace_declarations = OrderedDict()
+        self.namespace_declarations = dict_constructor()
         self.force_list = force_list
         self.comment_key = comment_key
 
@@ -101,9 +105,9 @@ class _DictSAXHandler(object):
         attrs = self._attrs_to_dict(attrs)
         if attrs and self.namespace_declarations:
             attrs['xmlns'] = self.namespace_declarations
-            self.namespace_declarations = OrderedDict()
+            self.namespace_declarations = self.dict_constructor()
         self.path.append((name, attrs or None))
-        if len(self.path) > self.item_depth:
+        if len(self.path) >= self.item_depth:
             self.stack.append((self.item, self.data))
             if self.xml_attribs:
                 attr_entries = []
@@ -132,12 +136,12 @@ class _DictSAXHandler(object):
             should_continue = self.item_callback(self.path, item)
             if not should_continue:
                 raise ParsingInterrupted()
-        if len(self.stack):
+        if self.stack:
             data = (None if not self.data
                     else self.cdata_separator.join(self.data))
             item = self.item
             self.item, self.data = self.stack.pop()
-            if self.strip_whitespace and data:
+            if self.strip_whitespace and data and item:
                 data = data.strip() or None
             if data and self.force_cdata and item is None:
                 item = self.dict_constructor()
@@ -254,14 +258,14 @@ def parse(xml_input, encoding=None, expat=expat, process_namespaces=False,
         ...         return key, value
         >>> xmltodict.parse('<a><b>1</b><b>2</b><b>x</b></a>',
         ...                 postprocessor=postprocessor)
-        OrderedDict([(u'a', OrderedDict([(u'b:int', [1, 2]), (u'b', u'x')]))])
+        {'a': {'b:int': [1, 2], 'b': 'x'}}
 
     You can pass an alternate version of `expat` (such as `defusedexpat`) by
     using the `expat` parameter. E.g:
 
         >>> import defusedexpat
         >>> xmltodict.parse('<a>hello</a>', expat=defusedexpat.pyexpat)
-        OrderedDict([(u'a', u'hello')])
+        {'a': 'hello'}
 
     You can use the force_list argument to force lists to be created even
     when there is only a single child of a given level of hierarchy. The
@@ -368,8 +372,8 @@ def parse(xml_input, encoding=None, expat=expat, process_namespaces=False,
         parser.ParseFile(xml_input)
     elif isgenerator(xml_input):
         for chunk in xml_input:
-            parser.Parse(chunk,False)
-        parser.Parse(b'',True)
+            parser.Parse(chunk, False)
+        parser.Parse(b'', True)
     else:
         parser.Parse(xml_input, True)
     return handler.item
@@ -416,7 +420,7 @@ def _emit(key, value, content_handler,
         if full_document and depth == 0 and index > 0:
             raise ValueError('document with multiple roots')
         if v is None:
-            v = OrderedDict()
+            v = _dict()
         elif isinstance(v, bool):
             if v:
                 v = _unicode('true')
@@ -424,13 +428,13 @@ def _emit(key, value, content_handler,
                 v = _unicode('false')
         elif not isinstance(v, dict):
             if expand_iter and hasattr(v, '__iter__') and not isinstance(v, _basestring):
-                v = OrderedDict(((expand_iter, v),))
+                v = _dict(((expand_iter, v),))
             else:
                 v = _unicode(v)
         if isinstance(v, _basestring):
-            v = OrderedDict(((cdata_key, v),))
+            v = _dict(((cdata_key, v),))
         cdata = None
-        attrs = OrderedDict()
+        attrs = _dict()
         children = []
         for ik, iv in v.items():
             if ik == cdata_key:
@@ -449,6 +453,8 @@ def _emit(key, value, content_handler,
                 attrs[ik[len(attr_prefix):]] = iv
                 continue
             children.append((ik, iv))
+        if type(indent) is int:
+            indent = ' ' * indent
         if pretty:
             content_handler.ignorableWhitespace(depth * indent)
         content_handler.startElement(key, AttributesImpl(attrs))
